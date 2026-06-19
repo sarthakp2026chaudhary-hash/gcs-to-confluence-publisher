@@ -69,55 +69,42 @@ class ArtefactSpec:
     source_kind: str  # "gcs" | "bq"
 
 
-# To migrate an entry to BigQuery (Phase E):
-#   1. Change ``source_kind`` to ``"bq"``.
-#   2. Change ``path_template`` to a fully-qualified BQ table reference, e.g.
-#      ``"<project>.<dataset>.<TABLE_PREFIX>_{date}"``. The placeholders
-#      ``{date}`` and ``{iso_date}`` still expand.
-#   3. Ensure the BQ table mirrors the original CSV's columns — renderer,
-#      publisher, page hierarchy stay unchanged. That invariance IS the proof.
+# ----------------------------------------------------------------------------
+# SMOKE-TEST REGISTRY (current state)
+# ----------------------------------------------------------------------------
+# Pinned to ONE specific file so we can verify the full pipe end-to-end
+# against a single ~900 KB CSV before scaling up to the multi-artefact loop.
+#
+# The publisher will:
+#   1. Read gs://<bucket>/outputs/grid_cv_predictions_20260612.csv
+#   2. Render its rows as an XHTML table on a Confluence page titled
+#      "Daily Predictions — 2026-06-12"
+#   3. Create a "Daily Predictions" sub-parent page under the configured
+#      confluence_parent_page_id, then post the dated child below it
+#   4. Attach the raw CSV bytes to the dated child page (text/csv) for the
+#      agent to download via the REST API
+#
+# To restore the full 6-artefact registry once the smoke succeeds, see git
+# log for "feat: GCS to Confluence publisher Airflow DAG" — the original
+# REGISTRY tuple is in that commit.
+#
+# Eventual goals (NOT implemented yet):
+#   - Sweep + delete Confluence pages older than 7 days
+#   - Auto-discover files for the last 2 days and skip ones already published
+#   - These are tracked separately; the smoke test only proves the pipe works.
+#
+# Notes on the pinned path:
+#   - path_template has NO {date}/{iso_date} placeholders, so the DAG's
+#     target_date computation (execution_date - lookback_days) is a no-op
+#     for this entry. You can trigger the DAG on any day and it will always
+#     try this one file.
+#   - title_template is also literal — no template substitution required.
+# ----------------------------------------------------------------------------
 REGISTRY: tuple[ArtefactSpec, ...] = (
-    # Daily, date-stamped (under outputs/)
     ArtefactSpec(
-        path_template="outputs/failed_runs_rca_{date}.csv",
-        title_template="Failed Runs RCA — {iso_date}",
-        parent_title="Failed Runs RCA",
-        render_kind="csv",
-        source_kind="gcs",
-    ),
-    ArtefactSpec(
-        path_template="outputs/grid_cv_predictions_{date}.csv",
-        title_template="Daily Predictions — {iso_date}",
+        path_template="outputs/grid_cv_predictions_20260612.csv",
+        title_template="Daily Predictions — 2026-06-12",
         parent_title="Daily Predictions",
-        render_kind="csv",
-        source_kind="gcs",
-    ),
-    ArtefactSpec(
-        path_template="outputs/failed_runs_rca_report_{date}.md",
-        title_template="Failed Runs RCA Report — {iso_date}",
-        parent_title="Failed Runs RCA Reports",
-        render_kind="md",
-        source_kind="gcs",
-    ),
-    ArtefactSpec(
-        path_template="outputs/report_{date}.md",
-        title_template="Daily Report — {iso_date}",
-        parent_title="Daily Reports",
-        render_kind="md",
-        source_kind="gcs",
-    ),
-    # Per-train, NOT date-stamped (under artefacts/) — overwrite on each train
-    ArtefactSpec(
-        path_template="artefacts/grid_cv_train_metrics.json",
-        title_template="Latest Train Metrics",
-        parent_title="Train Metrics",
-        render_kind="json",
-        source_kind="gcs",
-    ),
-    ArtefactSpec(
-        path_template="artefacts/grid_cv_feature_importance.csv",
-        title_template="Latest Feature Importance",
-        parent_title="Feature Importance",
         render_kind="csv",
         source_kind="gcs",
     ),
