@@ -1,16 +1,16 @@
 # config.py — minimal config for the Confluence publisher DAG.
 #
 # This folder deploys to Composer independently of GridSearch_ML/. It does NOT
-# import anything from that folder. The dev_config.json next to this file must
-# carry:
+# import anything from that folder. The publisher_config.json next to this
+# file must carry:
 #   - output_gcs_uri (must match what GridSearch_ML writes to)
 #   - target_service_account / quota_project_id / token_lifetime (auth)
 #   - confluence_* keys (identifiers only; token via Airflow Connection)
 #
 # Drift warning: output_gcs_uri here MUST stay in sync with the value in
-# GridSearch_ML/dev_config.json. If GridSearch_ML's bucket prefix changes, this
-# folder's config must be updated to match — otherwise the publisher reads from
-# an empty / wrong path.
+# GridSearch_ML/dev_config.json. If GridSearch_ML's bucket prefix changes,
+# this folder's config must be updated to match — otherwise the publisher
+# reads from an empty / wrong path.
 
 from __future__ import annotations
 
@@ -21,24 +21,24 @@ from pathlib import Path
 from typing import Any
 
 
-_DEV_CONFIG_PATH = Path(__file__).parent / "dev_config.json"
+_PUBLISHER_CONFIG_PATH = Path(__file__).parent / "publisher_config.json"
 
 
-def load_dev_config() -> dict[str, Any]:
-    """Load configuration from dev_config.json located next to this file."""
-    with _DEV_CONFIG_PATH.open(encoding="utf-8") as fh:
+def load_publisher_config() -> dict[str, Any]:
+    """Load configuration from publisher_config.json located next to this file."""
+    with _PUBLISHER_CONFIG_PATH.open(encoding="utf-8") as fh:
         return json.load(fh)
 
 
-_dev_cfg_cache: dict[str, Any] | None = None
+_publisher_cfg_cache: dict[str, Any] | None = None
 
 
-def _dev_cfg() -> dict[str, Any]:
-    """Return a cached copy of dev_config.json."""
-    global _dev_cfg_cache
-    if _dev_cfg_cache is None:
-        _dev_cfg_cache = load_dev_config()
-    return _dev_cfg_cache
+def _publisher_cfg() -> dict[str, Any]:
+    """Return a cached copy of publisher_config.json."""
+    global _publisher_cfg_cache
+    if _publisher_cfg_cache is None:
+        _publisher_cfg_cache = load_publisher_config()
+    return _publisher_cfg_cache
 
 
 @dataclass(frozen=True)
@@ -53,8 +53,8 @@ class BigQueryConfig:
     The publisher uses SA impersonation when ``target_service_account`` is set,
     and routes quota / billing to ``quota_project_id`` when set. ``project_id``
     and ``dataset_id`` are accepted for symmetry with GridSearch_ML but the
-    publisher does not require them — Phase E's BQSource resolves the BQ table
-    from the registry's ``path_template`` directly.
+    publisher does not require them — the BQSource resolves the BQ table from
+    the registry's ``path_template`` directly.
     """
 
     project_id: str = ""
@@ -70,7 +70,9 @@ class ConfluenceConfig:
 
     Identifiers only. The API token / PAT lives in an Airflow Connection
     referenced by ``auth_connection_id`` and is fetched at task runtime via
-    ``BaseHook.get_connection``. Nothing in this dataclass is a secret.
+    ``BaseHook.get_connection``. Nothing in this dataclass is a secret —
+    matching the pattern used by GridSearch_ML/dev_config.json (no password
+    in the JSON; credentials come via Airflow Connection or ADC).
     """
 
     base_url: str
@@ -91,8 +93,8 @@ class AppConfig:
 
 
 def load_config() -> AppConfig:
-    """Load minimal AppConfig (paths only) from dev_config.json."""
-    dcfg = _dev_cfg()
+    """Load minimal AppConfig (paths only) from publisher_config.json."""
+    dcfg = _publisher_cfg()
     return AppConfig(
         paths=PathsConfig(
             output_gcs_uri=str(dcfg.get("output_gcs_uri", "")).strip() or None,
@@ -101,14 +103,14 @@ def load_config() -> AppConfig:
 
 
 def load_bq_config() -> BigQueryConfig:
-    """Load BigQueryConfig from dev_config.json.
+    """Load BigQueryConfig from publisher_config.json.
 
     All fields are optional. With ``target_service_account`` unset (default),
     the publisher uses ADC. With it set, the GCS / BQ clients honor
     impersonation. ``quota_project_id`` routes billing to a separate project
     when set.
     """
-    dcfg = _dev_cfg()
+    dcfg = _publisher_cfg()
 
     target_sa = str(dcfg.get("target_service_account", "")).strip() or None
     quota_project = str(dcfg.get("quota_project_id", "")).strip() or None
@@ -124,7 +126,7 @@ def load_bq_config() -> BigQueryConfig:
 
 
 def load_confluence_config() -> ConfluenceConfig:
-    """Load Confluence publishing configuration from dev_config.json.
+    """Load Confluence publishing configuration from publisher_config.json.
 
     Required keys:
         - confluence_base_url
@@ -138,23 +140,23 @@ def load_confluence_config() -> ConfluenceConfig:
         - confluence_lookback_days      (default 2)
         - confluence_wide_cell_columns  (default ())
     """
-    dcfg = _dev_cfg()
+    dcfg = _publisher_cfg()
 
     base_url = str(dcfg.get("confluence_base_url", "")).strip()
     if not base_url:
-        raise ValueError("confluence_base_url is not set in dev_config.json.")
+        raise ValueError("confluence_base_url is not set in publisher_config.json.")
 
     space_key = str(dcfg.get("confluence_space_key", "")).strip()
     if not space_key:
-        raise ValueError("confluence_space_key is not set in dev_config.json.")
+        raise ValueError("confluence_space_key is not set in publisher_config.json.")
 
     parent_page_id = str(dcfg.get("confluence_parent_page_id", "")).strip()
     if not parent_page_id:
-        raise ValueError("confluence_parent_page_id is not set in dev_config.json.")
+        raise ValueError("confluence_parent_page_id is not set in publisher_config.json.")
 
     auth_connection_id = str(dcfg.get("confluence_auth_connection_id", "")).strip()
     if not auth_connection_id:
-        raise ValueError("confluence_auth_connection_id is not set in dev_config.json.")
+        raise ValueError("confluence_auth_connection_id is not set in publisher_config.json.")
 
     flavor = str(dcfg.get("confluence_flavor", "cloud")).strip().lower()
     if flavor not in {"cloud", "server"}:
