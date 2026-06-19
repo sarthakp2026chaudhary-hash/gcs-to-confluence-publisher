@@ -73,6 +73,11 @@ class ConfluenceConfig:
     ``BaseHook.get_connection``. Nothing in this dataclass is a secret —
     matching the pattern used by GridSearch_ML/dev_config.json (no password
     in the JSON; credentials come via Airflow Connection or ADC).
+
+    ``verify_ssl`` is True by default (matches Cloud). Set to False for
+    internal Server / Data Center hosts whose corporate certificate chain
+    isn't in Python's default trust store. Reference projects in the
+    CI/CD-tool repo set this False for ``wpb-confluence.systems.uk.*`` hosts.
     """
 
     base_url: str
@@ -83,6 +88,7 @@ class ConfluenceConfig:
     row_cap: int = 5000
     lookback_days: int = 2
     wide_cell_columns: tuple[str, ...] = ()
+    verify_ssl: bool = True
 
 
 @dataclass(frozen=True)
@@ -167,6 +173,7 @@ def load_confluence_config() -> ConfluenceConfig:
     row_cap = int(dcfg.get("confluence_row_cap", 5000))
     lookback_days = int(dcfg.get("confluence_lookback_days", 2))
     wide_cell_columns = tuple(dcfg.get("confluence_wide_cell_columns", []) or [])
+    verify_ssl = bool(dcfg.get("confluence_verify_ssl", True))
 
     return ConfluenceConfig(
         base_url=base_url.rstrip("/"),
@@ -177,6 +184,7 @@ def load_confluence_config() -> ConfluenceConfig:
         row_cap=row_cap,
         lookback_days=lookback_days,
         wide_cell_columns=wide_cell_columns,
+        verify_ssl=verify_ssl,
     )
 
 

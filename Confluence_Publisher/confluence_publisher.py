@@ -2,20 +2,23 @@
 
 """Confluence client wrapper.
 
-Phase A: title-based create-or-update against the configured space.
+Title-based create-or-update against the configured space. Every API call is
+wrapped with :func:`_with_retry` — 5 attempts with exponential backoff
+(10, 20, 30, 40 seconds between attempts). Matches the retry pattern used by
+the CI/CD-tool reference (``refresh_confl_recursion``); rationale is that
+Confluence APIs occasionally rate-limit or return transient 5xx and a single
+attempt fails the whole DAG run unnecessarily.
 
-Phase B additions:
-    - :class:`ConfluencePublishError` raised on any API failure, with a
-      message that names the connection id (not its value) and a sanitized
-      version of the underlying error message.
-    - :func:`_sanitize` redacts Basic-auth blobs and common query-string
-      credential parameters from error text, defending against API library
-      messages that occasionally include them.
+Errors that exhaust the retry budget surface as :class:`ConfluencePublishError`
+with a sanitized message naming the connection id (never the credential).
 
 The ``atlassian`` import is deferred to the constructor so the DAG file is
 still parseable by the scheduler when ``atlassian-python-api`` has not yet
-been added via Composer → Environment → PyPI packages — matching the
-``check_dependencies`` pattern in ``airflow_dag.py``.
+been added via Composer → Environment → PyPI packages.
+
+``verify_ssl=False`` is supported via :attr:`ConfluenceConfig.verify_ssl` for
+internal Server / Data Center hosts whose corporate cert chain isn't in
+Python's default trust store.
 """
 
 from __future__ import annotations
@@ -25,7 +28,9 @@ import logging
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
+from typing import Callable, TypeVar
 
 from config import ConfluenceConfig
 
@@ -33,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 
 class ConfluencePublishError(RuntimeError):
-    """Raised when a Confluence API call fails.
+    """Raised when a Confluence API call fails after retries.
 
     The exception message names the connection id (not the credential value)
     and includes a sanitized version of the underlying error.
@@ -46,6 +51,15 @@ _QUERY_AUTH_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Retry policy: 5 attempts with exponential backoff. Sleeps before retry are
+# 10, 20, 30, 40 seconds — total worst-case wait ~100s before giving up. Same
+# shape as the CI/CD-tool reference (MAX_RETRIES=5, DELAY*attempt backoff).
+_MAX_RETRIES = 5
+_RETRY_BASE_DELAY_SECONDS = 10
+
+
+T = TypeVar("T")
+
 
 def _sanitize(message: str) -> str:
     """Redact credential-looking substrings from an error message."""
@@ -54,8 +68,43 @@ def _sanitize(message: str) -> str:
     return message
 
 
+def _with_retry(call: Callable[[], T], *, op_name: str) -> T:
+    """Invoke ``call()`` with retry + exponential backoff.
+
+    Retries on any exception up to :data:`_MAX_RETRIES` times. Sleeps
+    ``_RETRY_BASE_DELAY_SECONDS * attempt`` seconds between attempts. The
+    last exception is re-raised if all attempts fail; the caller wraps it as
+    a :class:`ConfluencePublishError` with full surrounding context.
+    """
+    last_exc: BaseException | None = None
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            return call()
+        except Exception as exc:
+            last_exc = exc
+            backoff = _RETRY_BASE_DELAY_SECONDS * attempt
+            if attempt < _MAX_RETRIES:
+                logger.warning(
+                    "%s attempt %s/%s failed (%s) — sleeping %ss before retry.",
+                    op_name,
+                    attempt,
+                    _MAX_RETRIES,
+                    type(exc).__name__,
+                    backoff,
+                )
+                time.sleep(backoff)
+            else:
+                logger.error(
+                    "%s exhausted all %s retries — giving up.",
+                    op_name,
+                    _MAX_RETRIES,
+                )
+    assert last_exc is not None
+    raise last_exc
+
+
 class ConfluencePublisher:
-    """Title-based create-or-update Confluence publisher."""
+    """Title-based create-or-update Confluence publisher with retries."""
 
     def __init__(
         self,
@@ -78,6 +127,7 @@ class ConfluencePublisher:
             username=username,
             password=password,
             cloud=(config.flavor == "cloud"),
+            verify_ssl=config.verify_ssl,
         )
 
     def probe(self) -> bool:
@@ -87,11 +137,14 @@ class ConfluencePublisher:
         a wrong base URL, before any artefact is touched.
         """
         try:
-            self._client.get_space(self._config.space_key)
+            _with_retry(
+                lambda: self._client.get_space(self._config.space_key),
+                op_name="get_space",
+            )
             return True
         except Exception as exc:
             raise ConfluencePublishError(
-                "Confluence reachability probe failed for "
+                f"Confluence reachability probe failed after {_MAX_RETRIES} retries for "
                 f"connection_id={self._config.auth_connection_id!r} "
                 f"space={self._config.space_key!r}: "
                 f"{type(exc).__name__}: {_sanitize(str(exc))}"
@@ -108,16 +161,20 @@ class ConfluencePublisher:
 
         Lookup is by exact title within the configured space. If found, the page
         is updated and Confluence bumps its version. If not found, a new child
-        of ``parent_page_id`` (or the config default) is created.
+        of ``parent_page_id`` (or the config default) is created. All three API
+        calls (get_page_by_title, update_page, create_page) retry on failure.
         """
         parent_id = parent_page_id or self._config.parent_page_id
         space = self._config.space_key
 
         try:
-            existing = self._client.get_page_by_title(space=space, title=title)
+            existing = _with_retry(
+                lambda: self._client.get_page_by_title(space=space, title=title),
+                op_name=f"get_page_by_title({title!r})",
+            )
         except Exception as exc:
             raise ConfluencePublishError(
-                f"Confluence get_page_by_title failed for title={title!r} "
+                f"Confluence get_page_by_title failed after {_MAX_RETRIES} retries for title={title!r} "
                 f"connection_id={self._config.auth_connection_id!r}: "
                 f"{type(exc).__name__}: {_sanitize(str(exc))}"
             ) from exc
@@ -126,15 +183,19 @@ class ConfluencePublisher:
             page_id = str(existing["id"])
             logger.info("Updating Confluence page: id=%s title=%r", page_id, title)
             try:
-                self._client.update_page(
-                    page_id=page_id,
-                    title=title,
-                    body=body_xhtml,
-                    representation="storage",
+                _with_retry(
+                    lambda: self._client.update_page(
+                        page_id=page_id,
+                        title=title,
+                        body=body_xhtml,
+                        representation="storage",
+                    ),
+                    op_name=f"update_page(page_id={page_id})",
                 )
             except Exception as exc:
                 raise ConfluencePublishError(
-                    f"Confluence update_page failed for page_id={page_id} title={title!r} "
+                    f"Confluence update_page failed after {_MAX_RETRIES} retries for "
+                    f"page_id={page_id} title={title!r} "
                     f"connection_id={self._config.auth_connection_id!r}: "
                     f"{type(exc).__name__}: {_sanitize(str(exc))}"
                 ) from exc
@@ -147,16 +208,19 @@ class ConfluencePublisher:
             space,
         )
         try:
-            created = self._client.create_page(
-                space=space,
-                title=title,
-                body=body_xhtml,
-                parent_id=parent_id,
-                representation="storage",
+            created = _with_retry(
+                lambda: self._client.create_page(
+                    space=space,
+                    title=title,
+                    body=body_xhtml,
+                    parent_id=parent_id,
+                    representation="storage",
+                ),
+                op_name=f"create_page({title!r})",
             )
         except Exception as exc:
             raise ConfluencePublishError(
-                f"Confluence create_page failed for title={title!r} "
+                f"Confluence create_page failed after {_MAX_RETRIES} retries for title={title!r} "
                 f"parent_id={parent_id} connection_id={self._config.auth_connection_id!r}: "
                 f"{type(exc).__name__}: {_sanitize(str(exc))}"
             ) from exc
@@ -167,19 +231,19 @@ class ConfluencePublisher:
 
         If a page with this title exists in the space, return its id. Otherwise
         create it as a child of the root ``parent_page_id`` from config and
-        return the new id.
-
-        Phase C's hierarchy uses this for artefact-type sub-parents
-        (e.g. ``"Failed Runs RCA"``). Each run's dated child is then created
-        under the returned page id.
+        return the new id. Both API calls retry on failure.
         """
         space = self._config.space_key
 
         try:
-            existing = self._client.get_page_by_title(space=space, title=title)
+            existing = _with_retry(
+                lambda: self._client.get_page_by_title(space=space, title=title),
+                op_name=f"get_page_by_title(subparent={title!r})",
+            )
         except Exception as exc:
             raise ConfluencePublishError(
-                f"Confluence get_page_by_title (sub-parent) failed for title={title!r} "
+                f"Confluence get_page_by_title (sub-parent) failed after {_MAX_RETRIES} retries "
+                f"for title={title!r} "
                 f"connection_id={self._config.auth_connection_id!r}: "
                 f"{type(exc).__name__}: {_sanitize(str(exc))}"
             ) from exc
@@ -197,16 +261,20 @@ class ConfluencePublisher:
             "Dated artefacts publish as children of this page.</p>"
         )
         try:
-            created = self._client.create_page(
-                space=space,
-                title=title,
-                body=body,
-                parent_id=self._config.parent_page_id,
-                representation="storage",
+            created = _with_retry(
+                lambda: self._client.create_page(
+                    space=space,
+                    title=title,
+                    body=body,
+                    parent_id=self._config.parent_page_id,
+                    representation="storage",
+                ),
+                op_name=f"create_page(subparent={title!r})",
             )
         except Exception as exc:
             raise ConfluencePublishError(
-                f"Confluence create_page (sub-parent) failed for title={title!r} "
+                f"Confluence create_page (sub-parent) failed after {_MAX_RETRIES} retries "
+                f"for title={title!r} "
                 f"connection_id={self._config.auth_connection_id!r}: "
                 f"{type(exc).__name__}: {_sanitize(str(exc))}"
             ) from exc
@@ -229,19 +297,22 @@ class ConfluencePublisher:
 
         ``filename`` is the display name in Confluence (and the basename the
         agent downloads under). Bytes are written to a tempfile and uploaded
-        via ``atlassian.Confluence.attach_file``; the tempfile is removed in a
-        ``finally`` block regardless of success.
+        via ``atlassian.Confluence.attach_file`` (retried on failure); the
+        tempfile is removed in a ``finally`` block regardless of success.
         """
         suffix = Path(filename).suffix or ".bin"
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(content)
             tmp_path = tmp.name
         try:
-            self._client.attach_file(
-                filename=tmp_path,
-                name=filename,
-                content_type=content_type,
-                page_id=page_id,
+            _with_retry(
+                lambda: self._client.attach_file(
+                    filename=tmp_path,
+                    name=filename,
+                    content_type=content_type,
+                    page_id=page_id,
+                ),
+                op_name=f"attach_file({filename!r})",
             )
             logger.info(
                 "Attached source to Confluence page: page_id=%s filename=%r content_type=%s bytes=%s",
@@ -252,7 +323,7 @@ class ConfluencePublisher:
             )
         except Exception as exc:
             raise ConfluencePublishError(
-                f"Confluence attach_file failed for filename={filename!r} "
+                f"Confluence attach_file failed after {_MAX_RETRIES} retries for filename={filename!r} "
                 f"page_id={page_id} connection_id={self._config.auth_connection_id!r}: "
                 f"{type(exc).__name__}: {_sanitize(str(exc))}"
             ) from exc
