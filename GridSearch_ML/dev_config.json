@@ -1,0 +1,53 @@
+{
+    "project_id": "jonathon-gcpbucket-dev",
+    "dataset_id": "JONATHON_APP_MONITORING_DASHBOARD_DEV",
+
+    "tables": {
+        "JONATHON_SOURCE_DAG_RUN":         "JONATHON_AIRFLOW_SOURCE_DAG_RUN",
+        "JONATHON_SOURCE_TASK_INSTANCE":   "JONATHON_TASK_INSTANCE",
+        "JONATHON_SOURCE_DAG":             "JONATHON_SOURCE_DAG",
+        "JONATHON_SOURCE_SLA_MISS":        "JONATHON_SOURCE_SLA_MISS",
+        "JONATHON_SOURCE_JOB":             "JONATHON_SOURCE_JOB",
+        "JONATHON_SOURCE_LOG":             "JONATHON_SOURCE_LOG",
+        "JONATHON_DAG_ERROR_LOG_RECORDS":  "JONATHON_ERROR_LOG_RECORDS"
+    },
+
+    "target_service_account": null,
+    "quota_project_id":       null,
+    "token_lifetime":         3600,
+
+    "jonathon_db_uri":    "",
+    "jonathon_db_schema": null,
+
+    "enable_error_log_parsing":    true,
+    "log_max_objects_per_dag_run": 200,
+
+    "failure_states": "failed,upstream_failed,timeout",
+    "success_states": "success",
+
+    "history_days": 30,
+    "val_days":     14,
+    "test_days":    14,
+
+    "calibration_method": "isotonic",
+
+    "risk_threshold_high": 0.70,
+    "risk_threshold_med":  0.40,
+    "decision_threshold":  0.42,
+
+    "xgb_n_estimators":  150,
+    "xgb_max_depth":     4,
+    "xgb_learning_rate": 0.05,
+    "xgb_subsample":     0.8,
+    "xgb_colsample":     0.8,
+
+    "artefacts_dir":   "./artefacts",
+    "outputs_dir":     "./outputs",
+    "output_gcs_uri":  "gs://jonathon-outputs-dev/grid_search_ml/",
+
+    "report_html_enabled": false,
+    "report_top_n":        10,
+
+    "rca_failed_runs_lookback_days": 7,
+    "exit_after_diagnostics_logs":   false
+}
