@@ -33,6 +33,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import random
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
@@ -191,6 +193,14 @@ def publish_all(
         title = spec.title_template.format(date=compact_date, iso_date=iso_date)
 
         try:
+            # Rate-limit defense: 15-20s randomized pause between artefacts.
+            # Mirrors the ``time.sleep(DELAY)`` pattern in the
+            # JONATHON_HUB_CICD_TOOL_RESTFUL reference (confluence.py +
+            # confl_page_create.py both gate each major Confluence operation
+            # behind a 10-20s sleep). At ~6 artefacts per run, total added
+            # latency is ~90-120 seconds — negligible vs. an unmetered DAG.
+            time.sleep(random.randint(15, 20))
+
             source = _pick_source(
                 spec, gcs_source=gcs_source, bq_source=bq_source
             )

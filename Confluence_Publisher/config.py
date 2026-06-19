@@ -74,16 +74,19 @@ class ConfluenceConfig:
     matching the pattern used by GridSearch_ML/dev_config.json (no password
     in the JSON; credentials come via Airflow Connection or ADC).
 
-    ``verify_ssl`` is True by default (matches Cloud). Set to False for
-    internal Server / Data Center hosts whose corporate certificate chain
-    isn't in Python's default trust store. Reference projects in the
-    CI/CD-tool repo set this False for ``wpb-confluence.systems.uk.*`` hosts.
+    ``verify_ssl`` is True by default. Set to False for internal Server /
+    Data Center hosts whose corporate certificate chain isn't in Python's
+    default trust store. Reference projects in the CI/CD-tool repo set this
+    False for ``wpb-confluence.systems.uk.*`` hosts.
+
+    No ``flavor`` / ``cloud`` field: the library defaults ``cloud=False``
+    (Server/DC). The reference codebase never passes the parameter — we
+    match by omitting it from the ``Confluence(...)`` constructor call.
     """
 
     base_url: str
     space_key: str
     parent_page_id: str
-    flavor: str  # "cloud" | "server"
     auth_connection_id: str
     row_cap: int = 5000
     lookback_days: int = 2
@@ -164,12 +167,6 @@ def load_confluence_config() -> ConfluenceConfig:
     if not auth_connection_id:
         raise ValueError("confluence_auth_connection_id is not set in publisher_config.json.")
 
-    flavor = str(dcfg.get("confluence_flavor", "cloud")).strip().lower()
-    if flavor not in {"cloud", "server"}:
-        raise ValueError(
-            f"confluence_flavor must be 'cloud' or 'server', got {flavor!r}."
-        )
-
     row_cap = int(dcfg.get("confluence_row_cap", 5000))
     lookback_days = int(dcfg.get("confluence_lookback_days", 2))
     wide_cell_columns = tuple(dcfg.get("confluence_wide_cell_columns", []) or [])
@@ -179,7 +176,6 @@ def load_confluence_config() -> ConfluenceConfig:
         base_url=base_url.rstrip("/"),
         space_key=space_key,
         parent_page_id=parent_page_id,
-        flavor=flavor,
         auth_connection_id=auth_connection_id,
         row_cap=row_cap,
         lookback_days=lookback_days,

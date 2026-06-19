@@ -252,9 +252,8 @@ def run_publish(**context: Any) -> dict[str, Any]:
         bq_config = load_bq_config()
         confluence_config = load_confluence_config()
         logger.info(
-            "Configuration loaded: connection_id=%s flavor=%s lookback_days=%s",
+            "Configuration loaded: connection_id=%s lookback_days=%s",
             confluence_config.auth_connection_id,
-            confluence_config.flavor,
             confluence_config.lookback_days,
         )
 

@@ -16,7 +16,6 @@ Source path: `Confluence_Publisher/publisher_config.json`
     "confluence_base_url":           "https://<your-confluence-host>",
     "confluence_space_key":          "",
     "confluence_parent_page_id":     "",
-    "confluence_flavor":             "server",
     "confluence_verify_ssl":         false,
     "confluence_auth_connection_id": "confluence_default",
     "confluence_row_cap":            5000,

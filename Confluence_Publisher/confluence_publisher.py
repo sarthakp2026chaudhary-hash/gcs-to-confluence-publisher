@@ -122,11 +122,13 @@ class ConfluencePublisher:
             )
 
         self._config = config
+        # ``cloud=`` is deliberately omitted to match the reference codebase
+        # (``JONATHON_HUB_CICD_TOOL_RESTFUL`` never passes it). The library
+        # defaults to ``cloud=False`` which is the Server/DC behaviour we want.
         self._client = Confluence(
             url=config.base_url,
             username=username,
             password=password,
-            cloud=(config.flavor == "cloud"),
             verify_ssl=config.verify_ssl,
         )
 
