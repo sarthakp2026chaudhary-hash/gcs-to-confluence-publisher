@@ -90,6 +90,8 @@ class ConfluenceConfig:
     auth_connection_id: str
     row_cap: int = 5000
     lookback_days: int = 2
+    retention_days: int = 14
+    auto_marker: str = "<!-- AUTO-GENERATED -->"
     wide_cell_columns: tuple[str, ...] = ()
     verify_ssl: bool = True
 
@@ -169,6 +171,8 @@ def load_confluence_config() -> ConfluenceConfig:
 
     row_cap = int(dcfg.get("confluence_row_cap", 5000))
     lookback_days = int(dcfg.get("confluence_lookback_days", 2))
+    retention_days = int(dcfg.get("confluence_retention_days", 14))
+    auto_marker = str(dcfg.get("confluence_auto_marker", "<!-- AUTO-GENERATED -->"))
     wide_cell_columns = tuple(dcfg.get("confluence_wide_cell_columns", []) or [])
     verify_ssl = bool(dcfg.get("confluence_verify_ssl", True))
 
@@ -179,6 +183,8 @@ def load_confluence_config() -> ConfluenceConfig:
         auth_connection_id=auth_connection_id,
         row_cap=row_cap,
         lookback_days=lookback_days,
+        retention_days=retention_days,
+        auto_marker=auto_marker,
         wide_cell_columns=wide_cell_columns,
         verify_ssl=verify_ssl,
     )

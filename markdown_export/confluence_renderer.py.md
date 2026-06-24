@@ -14,8 +14,13 @@ Three renderers (one per artefact ``render_kind`` in the runtime registry):
                                 ``<pre>`` so a missing dep does not abort).
     :func:`render_json_table` — JSON-like object → recursive key/value table.
 
-All three share :func:`_render_footer` for the provenance block at the bottom
-of every page.
+Plus :func:`render_attachment_only_placeholder` — a tiny body used when the
+full-rendered XHTML would exceed Confluence's page body size limit; the agent
+still gets the structured payload via the page attachment.
+
+Every body is prefixed with the configured ``auto_marker`` HTML comment so the
+retention sweeper can identify auto-generated pages and skip ones that humans
+have taken ownership of.
 """
 
 from __future__ import annotations
@@ -36,6 +41,13 @@ _WIDE_CELL_STYLE = (
     "font-family:monospace; font-size:smaller;"
 )
 
+# Confluence Server / DC page body size limit is ~5 MB of XHTML in default
+# config. Anything above WARN should log; anything at or above HARD should
+# fall back to :func:`render_attachment_only_placeholder` so the publish does
+# not fail with a 413 / 400.
+PAGE_BODY_WARN_BYTES: int = 4 * 1024 * 1024  # 4 MB
+PAGE_BODY_HARD_LIMIT_BYTES: int = 5 * 1024 * 1024  # 5 MB
+
 
 def render_csv_table(
     df: pd.DataFrame,
@@ -46,6 +58,7 @@ def render_csv_table(
     row_cap: int = 5000,
     wide_cell_columns: tuple[str, ...] = (),
     run_context: dict[str, str] | None = None,
+    auto_marker: str = "",
 ) -> str:
     """Return the Confluence storage-format XHTML body for a DataFrame.
 
@@ -106,7 +119,9 @@ def render_csv_table(
         run_context=run_context,
     )
 
-    return title_xhtml + truncation_note + table_xhtml + footer
+    return _prepend_marker(
+        title_xhtml + truncation_note + table_xhtml + footer, auto_marker
+    )
 
 
 def render_markdown(
@@ -116,6 +131,7 @@ def render_markdown(
     source_uri: str,
     generated_at: datetime,
     run_context: dict[str, str] | None = None,
+    auto_marker: str = "",
 ) -> str:
     """Render markdown text as a Confluence page body.
 
@@ -131,7 +147,7 @@ def render_markdown(
         rows_total=None,
         run_context=run_context,
     )
-    return title_xhtml + body_html + footer
+    return _prepend_marker(title_xhtml + body_html + footer, auto_marker)
 
 
 def render_json_table(
@@ -142,6 +158,7 @@ def render_json_table(
     generated_at: datetime,
     run_context: dict[str, str] | None = None,
     max_depth: int = 2,
+    auto_marker: str = "",
 ) -> str:
     """Render a JSON-like object as a Confluence key/value table.
 
@@ -157,7 +174,58 @@ def render_json_table(
         rows_total=None,
         run_context=run_context,
     )
-    return title_xhtml + body_html + footer
+    return _prepend_marker(title_xhtml + body_html + footer, auto_marker)
+
+
+def render_attachment_only_placeholder(
+    *,
+    title: str,
+    source_uri: str,
+    generated_at: datetime,
+    raw_size_bytes: int,
+    attempted_render_size_bytes: int | None = None,
+    run_context: dict[str, str] | None = None,
+    auto_marker: str = "",
+) -> str:
+    """Render a tiny placeholder body when the full table would exceed the limit.
+
+    Used by the runtime when the rendered XHTML body crosses
+    :data:`PAGE_BODY_HARD_LIMIT_BYTES`. The agent still gets the structured
+    payload via the attachment; the page just tells human readers where it is.
+    """
+    title_xhtml = f"<h1>{html.escape(title)}</h1>"
+    notice_parts = [
+        "<p><strong>Inline rendering skipped.</strong> The source artefact is ",
+        f"{raw_size_bytes:,} bytes — rendering it as an XHTML table would exceed ",
+        "the Confluence page body size limit",
+    ]
+    if attempted_render_size_bytes is not None:
+        notice_parts.append(
+            f" (attempted body size: {attempted_render_size_bytes:,} bytes)"
+        )
+    notice_parts.append(
+        ". The full raw data is available as the attachment on this page.</p>"
+    )
+    notice = "".join(notice_parts)
+    footer = _render_footer(
+        source_uri=source_uri,
+        generated_at=generated_at,
+        rows_total=None,
+        run_context=run_context,
+    )
+    return _prepend_marker(title_xhtml + notice + footer, auto_marker)
+
+
+def body_size_bytes(body_xhtml: str) -> int:
+    """Return the UTF-8 byte length of an XHTML body — used for size gating."""
+    return len(body_xhtml.encode("utf-8"))
+
+
+def _prepend_marker(body: str, auto_marker: str) -> str:
+    """Prepend the AUTO-GENERATED marker comment if one is configured."""
+    if not auto_marker:
+        return body
+    return f"{auto_marker}\n{body}"
 
 
 def _render_footer(

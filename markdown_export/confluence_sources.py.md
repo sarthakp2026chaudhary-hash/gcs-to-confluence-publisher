@@ -92,11 +92,15 @@ class GCSSource:
             )
         return blob.download_as_text(encoding="utf-8")
 
-    def list_under(self, prefix: str) -> list[str]:
+    def list_under(self, prefix: str, *, max_results: int = 5) -> list[str]:
         """Return object names under ``{base_prefix}/{prefix}``.
 
-        Used by ``check_dependencies`` to probe GCS reachability — at least one
-        object found under the expected prefix means auth + path are correct.
+        Two callers, two regimes:
+        - ``check_dependencies`` probes with ``max_results=5`` (default) —
+          enough to confirm the bucket is reachable.
+        - The discovery loop in ``confluence_runtime.publish_all`` calls with
+          a higher cap (e.g. 1000) to enumerate ALL dated files matching a
+          glob-style ``path_template`` prefix.
         """
         full_prefix = (
             f"{self._base_prefix}/{prefix}".strip("/")
@@ -106,7 +110,7 @@ class GCSSource:
         return [
             blob.name
             for blob in self._client.list_blobs(
-                self._bucket_name, prefix=full_prefix, max_results=5
+                self._bucket_name, prefix=full_prefix, max_results=max_results
             )
         ]
 

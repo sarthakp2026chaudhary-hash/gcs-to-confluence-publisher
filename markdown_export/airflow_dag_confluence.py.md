@@ -288,9 +288,11 @@ def run_publish(**context: Any) -> dict[str, Any]:
         )
 
         logger.info(
-            "Confluence publish complete: published=%s skipped_unchanged=%s errors=%s target_date=%s",
+            "Confluence publish complete: published=%s skipped_existing=%s "
+            "skipped_unchanged=%s errors=%s target_date=%s",
             len(result["published"]),
-            len(result["skipped_unchanged"]),
+            len(result.get("skipped_existing", [])),
+            len(result.get("skipped_unchanged", [])),
             len(result["errors"]),
             result["target_date"],
         )
@@ -302,6 +304,69 @@ def run_publish(**context: Any) -> dict[str, Any]:
 
     except Exception as exc:
         logger.error("Confluence publish task failed: %s", exc, exc_info=True)
+        raise
+
+
+def sweep_old_pages(**context: Any) -> dict[str, Any]:
+    """Delete dated child pages older than ``confluence_config.retention_days``.
+
+    Phase G retention sweep. Runs AFTER ``run_publish``. Per artefact-type
+    sub-parent, lists children, parses the title-date, and deletes any pages
+    older than the retention window AND still carrying the AUTO-GENERATED
+    marker. Pages without a parseable title-date (rolling pages like "Latest
+    Train Metrics") and pages whose body lacks the marker (human-owned) are
+    KEPT.
+    """
+    execution_date = context["execution_date"].date()
+    logger.info("Running Confluence retention sweep: execution_date=%s", execution_date)
+
+    ml_predict_path = Path(__file__).parent
+    if str(ml_predict_path) not in sys.path:
+        sys.path.insert(0, str(ml_predict_path))
+
+    from airflow.hooks.base import BaseHook
+
+    from config import load_confluence_config
+    from confluence_runtime import sweep_all
+
+    try:
+        confluence_config = load_confluence_config()
+        logger.info(
+            "Sweep config: retention_days=%s connection_id=%s",
+            confluence_config.retention_days,
+            confluence_config.auth_connection_id,
+        )
+
+        conn = BaseHook.get_connection(confluence_config.auth_connection_id)
+
+        result = sweep_all(
+            today=execution_date,
+            confluence_config=confluence_config,
+            confluence_username=conn.login or "",
+            confluence_password=conn.password or "",
+        )
+
+        logger.info(
+            "Confluence sweep complete: deleted=%s kept_recent=%s "
+            "kept_rolling=%s kept_human_owned=%s errors=%s cutoff=%s",
+            len(result["deleted"]),
+            len(result["kept_recent"]),
+            len(result["kept_rolling"]),
+            len(result["kept_human_owned"]),
+            len(result["errors"]),
+            result["cutoff_date"],
+        )
+
+        for deleted in result["deleted"]:
+            logger.info("Swept: %s (page_id=%s, dated=%s)",
+                deleted["title"], deleted["page_id"], deleted["date"])
+        for err in result["errors"]:
+            logger.error("Sweep error: %s", err)
+
+        return result
+
+    except Exception as exc:
+        logger.error("Confluence sweep task failed: %s", exc, exc_info=True)
         raise
 
 
@@ -319,10 +384,23 @@ task_run_publish = PythonOperator(
     task_id="run_publish",
     python_callable=run_publish,
     provide_context=True,
-    doc_md="Read registered GCS artefacts and publish each as a Confluence page.",
+    doc_md="Discover, filter, and publish dated GCS artefacts as Confluence pages.",
     dag=dag_confluence_publish,
 )
 
-# DAG flow: GCS → Confluence publish
+task_sweep_old_pages = PythonOperator(
+    task_id="sweep_old_pages",
+    python_callable=sweep_old_pages,
+    provide_context=True,
+    doc_md=(
+        "Delete dated child pages older than confluence_retention_days "
+        "(default 14). Skips rolling pages and pages without the "
+        "AUTO-GENERATED marker."
+    ),
+    dag=dag_confluence_publish,
+)
+
+# DAG flow: check_dependencies -> run_publish -> sweep_old_pages
 task_run_publish.set_upstream(task_check_dependencies_confluence)
+task_sweep_old_pages.set_upstream(task_run_publish)
 ```
