@@ -282,6 +282,82 @@ class ConfluencePublisher:
             ) from exc
         return str(created["id"])
 
+    def page_exists(self, *, title: str) -> bool:
+        """Return True if a page with this title already exists in the space.
+
+        Lightweight idempotency check used by the runtime to skip publishing
+        artefacts whose dated page has already been produced. Cheaper than
+        downloading the source file and computing a content hash.
+        """
+        space = self._config.space_key
+        try:
+            existing = _with_retry(
+                lambda: self._client.get_page_by_title(space=space, title=title),
+                op_name=f"page_exists({title!r})",
+            )
+        except Exception as exc:
+            raise ConfluencePublishError(
+                f"Confluence page_exists check failed after {_MAX_RETRIES} retries "
+                f"for title={title!r} "
+                f"connection_id={self._config.auth_connection_id!r}: "
+                f"{type(exc).__name__}: {_sanitize(str(exc))}"
+            ) from exc
+        return bool(existing)
+
+    def list_children(self, *, parent_page_id: str) -> list[dict]:
+        """List child pages of ``parent_page_id``. Used by the retention sweep."""
+        try:
+            children = _with_retry(
+                lambda: list(
+                    self._client.get_page_child_by_type(
+                        parent_page_id, type="page"
+                    )
+                ),
+                op_name=f"list_children(parent_id={parent_page_id})",
+            )
+        except Exception as exc:
+            raise ConfluencePublishError(
+                f"Confluence list_children failed after {_MAX_RETRIES} retries "
+                f"for parent_id={parent_page_id} "
+                f"connection_id={self._config.auth_connection_id!r}: "
+                f"{type(exc).__name__}: {_sanitize(str(exc))}"
+            ) from exc
+        return children
+
+    def get_page_body(self, *, page_id: str) -> str:
+        """Return the XHTML body of an existing page (for marker check)."""
+        try:
+            page = _with_retry(
+                lambda: self._client.get_page_by_id(
+                    page_id, expand="body.storage"
+                ),
+                op_name=f"get_page_body(page_id={page_id})",
+            )
+        except Exception as exc:
+            raise ConfluencePublishError(
+                f"Confluence get_page_by_id failed after {_MAX_RETRIES} retries "
+                f"for page_id={page_id} "
+                f"connection_id={self._config.auth_connection_id!r}: "
+                f"{type(exc).__name__}: {_sanitize(str(exc))}"
+            ) from exc
+        return str(page.get("body", {}).get("storage", {}).get("value", ""))
+
+    def delete_page(self, *, page_id: str) -> None:
+        """Delete a page (and its attachments — Confluence handles that)."""
+        try:
+            _with_retry(
+                lambda: self._client.remove_page(page_id),
+                op_name=f"delete_page(page_id={page_id})",
+            )
+            logger.info("Deleted Confluence page: id=%s", page_id)
+        except Exception as exc:
+            raise ConfluencePublishError(
+                f"Confluence delete_page failed after {_MAX_RETRIES} retries "
+                f"for page_id={page_id} "
+                f"connection_id={self._config.auth_connection_id!r}: "
+                f"{type(exc).__name__}: {_sanitize(str(exc))}"
+            ) from exc
+
     def attach_source(
         self,
         *,
