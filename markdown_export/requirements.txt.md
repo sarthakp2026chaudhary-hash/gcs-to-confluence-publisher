@@ -1,3 +1,8 @@
+# `requirements.txt`
+
+Source path: `requirements.txt` (repo root)
+
+```
 # requirements.txt — Python 3.11.8
 #
 # For LOCAL development of the Confluence_Publisher DAG (venv, IDE import
@@ -57,3 +62,4 @@ markdown>=3.5
 #   json, hashlib, logging, random, time, html, io, re, os, tempfile, sys
 #   dataclasses, datetime, pathlib, typing, urllib.parse
 # ============================================================================
+```

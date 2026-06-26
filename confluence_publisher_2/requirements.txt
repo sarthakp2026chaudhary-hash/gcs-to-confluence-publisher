@@ -14,7 +14,7 @@
 # ============================================================================
 # Confluence + Atlassian client (REQUIRED for the publisher)
 # ============================================================================
-atlassian-python-api>=3.41.0,<4.0
+atlassian-python-api>=3.41.0,<5.0   # widened upper bound to accept 4.x (we use only stable methods)
 requests>=2.31.0                  # transitive dep of atlassian, pinned for SSL/TLS predictability
 urllib3>=1.26.18,<3.0             # transitive; verify_ssl=False warnings come from this layer
 
